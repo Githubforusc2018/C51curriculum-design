@@ -1,0 +1,433 @@
+C51 COMPILER V9.00   1                                                                     06/07/2019 08:28:27 PAGE 1   
+
+
+C51 COMPILER V9.00, COMPILATION OF MODULE 1
+OBJECT MODULE PLACED IN 1.OBJ
+COMPILER INVOKED BY: D:\Keil_v4\C51\BIN\C51.EXE 1.c BROWSE DEBUG OBJECTEXTEND
+
+line level    source
+
+   1          #include <reg52.h>
+   2          #define uchar unsigned char
+   3          #define uint unsigned int
+   4          uchar code led_modA[11] = {0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f,0x40};     // 0 1 2 3 4 5 6 7 8 9
+             - -
+   5          uchar code led_modB[11]={0xbf,0x86,0xdb,0xcf,0xe6,0xed,0xfd,0x87,0xff,0xef,0x00}; //带小数点的共阴数码管段
+             -码
+   6          uchar code wela[8] = {0xfe,0xfd,0xfb,0xf7,0xef,0xdf,0xbf,0x7f};            ////0开启位选
+   7          uchar time[8] = {0,0,10,0,0,10,0,0};
+   8          //1111 1110 
+   9          
+  10          sbit EN =  P2^0;
+  11          sbit RW =  P2^1;
+  12          sbit RS =  P2^2;
+  13          sbit TP =  P2^3;
+  14          /*
+  15                  定义外部中断0.
+  16          */
+  17          
+  18          sbit beep = P2^7;
+  19          //全部DQ换成TP.
+  20          
+  21          /*
+  22                  定义外部中断1，跟闹钟有关.
+  23          */
+  24          uint second = 0;           //定义秒数
+  25          uint alarmsecond = 5;   //闹钟秒数
+  26          uchar count = 0;                //计数
+  27          
+  28          bit mode = 0;                   //切换模式
+  29          uint setAlarm = 0;              //设置闹钟默认，0默认不设置.1设置闹钟，2确认.
+  30          
+  31          unsigned char tempL=0;  //设全局变量，温度高8位
+  32          unsigned char tempH=0; 
+  33          unsigned int Sdata;             //测量到的温度的整数部分
+  34          unsigned char xiaoshu; //小数第一位
+  35          
+  36          uchar code DisplayNums[] = "0123456789-";
+  37          uchar code DisplayTips[] = "Temp";
+  38          uchar code DisplayAlarm[] = "Alarm:";
+  39          uchar code DisplayAlarmOpenStatus[] = "open ";
+  40          uchar code DisplayAlarmCloseStatus[] = "close";
+  41          
+  42          
+  43          void delay(unsigned char i);                            //延迟微妙
+  44          void delay1ms(int Z);                                           //延时毫秒
+  45          void onTimeAlarm();                                                     //设置整点报时
+  46          void alarmClock();                                                      //设置闹钟
+  47          void showTime(uint temporaryTime);                      //显示时间.
+  48          ReadOneChar(void);                                                      //读一个字节
+  49          void WriteOneChar(unsigned char dat) ;          //写一个字节
+  50          void Init_DS18B20(void) ;                                       //初始化温度传感器
+  51          void ReadTemperature(void) ;                            //读温度值
+  52          void showTemperature(unsigned int date);        //显示温度值
+  53          void Write_Com(uchar Com);                                      //液晶写指令
+C51 COMPILER V9.00   1                                                                     06/07/2019 08:28:27 PAGE 2   
+
+  54          void Write_Data(uchar Data);                            //液晶写数据
+  55          void Lcd_Init();                                                        //液晶初始化
+  56          void Display_Temperature(uint Data);            //液晶显示温度
+  57          void Display_Static_Temperature();                      //液晶显示静态数据  
+  58          void main(){
+  59   1              TMOD =  0x21;   //
+  60   1              TH0 = (65536-50000)/256;
+  61   1              TL0 = (65536-50000)%256;
+  62   1              TH1 = 0xfd;//设置初值 9600=(2 的 SMOD 次方/32)*（TI 溢出率）=（1/32）*11059200/(256-X)*12
+  63   1              TH0 = 0xfd;
+  64   1              SM0 = 0;
+  65   1              SM1 = 1;
+  66   1              REN = 1;   //允许串口接收
+  67   1              EA = 1;         //总中断
+  68   1              EX0 = 1;        //外部分中断
+  69   1              IT0 = 1;        //下降沿
+  70   1      
+  71   1              ET0 = 1;        //定时分中断
+  72   1              TR0 = 1;
+  73   1              TR1 = 1;
+  74   1              ES = 1; //开启串口中断
+  75   1              //delay1ms(750);        //网上说这是正常现象，延时750ms，消掉85°
+  76   1              Lcd_Init();
+  77   1              Display_Static_Temperature();     //温度会跳变.注释多?
+  78   1              while(1){
+  79   2                      ReadTemperature(); //读取温度
+  80   2                      if (second%3600==0)     
+  81   2                              onTimeAlarm();  //检测
+  82   2                      else if (alarmsecond==0 && setAlarm==2)         //有确认建才有用
+  83   2                              alarmClock();   //检测,char不能用==1,==2这样
+  84   2                      if (mode==0){
+  85   3                              if (setAlarm==1){
+  86   4                                 showTime(alarmsecond);       
+  87   4                              }
+  88   3                              else if (second%10>=8 && second%10<=9){
+  89   4                                      showTemperature(Sdata);           //显示温度 
+  90   4                              }
+  91   3                              else{
+  92   4                                      showTime(second);         //显示自己的时钟
+  93   4                              }       
+  94   3                      }else{
+  95   3                              Display_Temperature(Sdata);      //液晶显示与数码管动态显示冲突，这里只能二选一
+  96   3                      }
+  97   2              }
+  98   1      }
+  99          void onTimeAlarm(){
+ 100   1              uint i=0,j=0,k=0;
+ 101   1              //整点报时...
+ 102   1              k = second/3600;
+ 103   1              while(k--){
+ 104   2                      for(i=0;i<2;i++){
+ 105   3                              beep=~beep;     //响一声.
+ 106   3                              for(j=0;j<20;j++)       showTime(second);       //修改时间为负数
+ 107   3                      }
+ 108   2              }
+ 109   1              beep=1;
+ 110   1      }
+ 111          void alarmClock(){
+ 112   1              //时间到.重复响5下.
+ 113   1              uint i=0,j=0;
+ 114   1              uint mycount = 5;
+ 115   1              while(mycount--){
+C51 COMPILER V9.00   1                                                                     06/07/2019 08:28:27 PAGE 3   
+
+ 116   2                      for(i=0;i<2;i++){
+ 117   3                              beep=~beep;     //响一声.
+ 118   3                              for(j=0;j<20;j++)       showTime(alarmsecond);  //修改时间为负数,液晶显示执行时间问题,,,
+ 119   3                      }       
+ 120   2              }
+ 121   1              beep=1;
+ 122   1              setAlarm = 0;   //闹钟到了还设置？
+ 123   1              alarmsecond = 5;        //恢复一开始的状态.
+ 124   1      }
+ 125          void showTemperature(unsigned int date)
+ 126          { 
+ 127   1              /*
+ 128   1                      困惑很久，之前有问题，现在没了.
+ 129   1              */
+ 130   1              //P1=0xfb;     //P1.0=0，选通第一位
+ 131   1              //P0=seg7code[date/10];  //十位数，查表，输出
+ 132   1              P1 = wela[5];
+ 133   1              P0 = led_modA[date/10];
+ 134   1              delay1ms(2);
+ 135   1              P1=0xff;
+ 136   1              P1 = wela[6];
+ 137   1              P0 = led_modB[date%10];
+ 138   1              delay1ms(2);
+ 139   1              P1=0xff;
+ 140   1              P1 = wela[7];
+ 141   1              P0 = led_modA[xiaoshu];
+ 142   1              delay1ms(2);
+ 143   1              P1=0xff;
+ 144   1      }
+ 145          /*
+ 146                  延迟1ms
+ 147          */
+ 148          void delay1ms(int Z){                                                                                                                                                                    
+             -      
+ 149   1              int i=0;
+ 150   1              while(Z--){
+ 151   2                      for(i=0;i<113;i++);
+ 152   2              }
+ 153   1      }
+ 154          /*
+ 155                  延迟1us
+ 156          */
+ 157          void delay(unsigned char i)
+ 158          {
+ 159   1               for(i;i>0;i--);
+ 160   1      }
+ 161          void showTime(uint temporaryTime){
+ 162   1              /*
+ 163   1                      不用这样,比如370s,秒数370%60 = 10.分数370/60,小时370%3600.
+ 164   1                      按下设置闹钟后，或没按，我只显示我要显示的，其他我不管.
+ 165   1              */
+ 166   1              char k=0;
+ 167   1              if (temporaryTime<=0)   temporaryTime = 0;
+ 168   1              time[0] = (temporaryTime/3600)/10;        //最大18小时?
+ 169   1              time[1] = (temporaryTime/3600)%10;
+ 170   1              time[3] = (temporaryTime%3600)/60/10;   //分超过60？假设现在59分 = 59x60 =      3540s
+ 171   1              time[4] = (temporaryTime%3600)/60%10;
+ 172   1              time[6] = (temporaryTime%60)/10;
+ 173   1              time[7] = (temporaryTime%60)%10;
+ 174   1              if (mode==1){
+ 175   2                      //开始写.
+ 176   2                      Write_Com(0x80+0x40+8);
+C51 COMPILER V9.00   1                                                                     06/07/2019 08:28:27 PAGE 4   
+
+ 177   2                      for(k=0;k<8;k++)
+ 178   2                              Write_Data(DisplayNums[time[k]]);
+ 179   2              }else{
+ 180   2                      for(k=0;k<8;k++){
+ 181   3                              P1=wela[k];
+ 182   3                              P0=led_modA[time[k]];
+ 183   3                              delay1ms(2);
+ 184   3                      }
+ 185   2                      P1 = 0xff;
+ 186   2              }
+ 187   1                        
+ 188   1      }
+ 189          /*
+ 190                  开启定时器0中断，定义每个1s，秒数加1.
+ 191                  每次定时50ms，1s中就是20次中断.
+ 192          */
+ 193          void changeTime() interrupt 0{
+ 194   1              /*
+ 195   1                      不需要确认键，在原基础上增加即可，这样能快速退出中断.
+ 196   1                      取高4位的情况,进行与预算0111 0000 = 0x70
+ 197   1                      add_hour        x110   0x60
+ 198   1                      add_minute      x101   0x50
+ 199   1                      add_second  x100   0x40
+ 200   1                      change_mode x011   0x30
+ 201   1                      setclock    x010   0x20
+ 202   1                      confirm     x001   0x10
+ 203   1              */
+ 204   1              uchar status = P2&0x70;
+ 205   1              uint temporarysecond = 0;
+ 206   1              //一开始setAlarm=0,默认加秒数,当按下setAlarm时,alarmsecond = second,出现显示出错问题.
+ 207   1              switch(status){
+ 208   2                      case 0x60:      temporarysecond = temporarysecond + 3600;break;
+ 209   2                      case 0x50:  temporarysecond = temporarysecond + 60;break;
+ 210   2                      case 0x40:  temporarysecond = temporarysecond + 1;break;
+ 211   2                      case 0x30:  mode = !mode;break;
+ 212   2                      case 0x20:      setAlarm = 1;break;      //这里是开始设置闹钟
+ 213   2                      case 0x10:      setAlarm = 2;break;  //这里是确认闹钟.
+ 214   2                      case 0x00:      break;
+ 215   2              }
+ 216   1              //一个临时变量,然后再加上初值即可.
+ 217   1              if (setAlarm==1){
+ 218   2                      //设置闹钟.
+ 219   2                      alarmsecond = alarmsecond + temporarysecond;
+ 220   2              }else{
+ 221   2                      second = second + temporarysecond;
+ 222   2              }
+ 223   1      }
+ 224          void timer0() interrupt 1{
+ 225   1              TH0 = (65536-50000)/256;
+ 226   1              TL0 = (65536-50000)%256;
+ 227   1              if (count++==20){
+ 228   2                      count = 0;
+ 229   2                      second = second + 1;    //判断hour = 24小时.
+ 230   2                      if (setAlarm==2){          //不会执行?
+ 231   3                              //开始计时.
+ 232   3                              alarmsecond = alarmsecond - 1;
+ 233   3                      }
+ 234   2              }
+ 235   1      }
+ 236          void setAlarmBySerialPort() interrupt 4{
+ 237   1              /*
+ 238   1                      接收串口,设置闹钟,格式是00-00-00,虚拟终端.
+C51 COMPILER V9.00   1                                                                     06/07/2019 08:28:27 PAGE 5   
+
+ 239   1                      方式1，10位异步收发，这时需要设置定时器1
+ 240   1              */
+ 241   1              char k=0;
+ 242   1              for(k=0;k<8;k++){
+ 243   2                      while(!RI);     //等接收数据完毕.
+ 244   2                      RI=0;     //接收到数据，软件清0
+ 245   2                      time[k] = SBUF;
+ 246   2              }
+ 247   1      
+ 248   1      }
+ 249          void Init_DS18B20(void) 
+ 250          {
+ 251   1              unsigned char x=0;
+ 252   1              TP=1; //DQ先置高 
+ 253   1              delay(8); //稍延时
+ 254   1              TP=0; //发送复位脉冲 
+ 255   1              delay(80); //延时（>480us) 
+ 256   1              TP=1; //拉高数据线 
+ 257   1              delay(5); //等待（15~60us) 
+ 258   1              x=TP; //用X的值来判断初始化有没有成功，18B20存在的话X=0，否则X=1 
+ 259   1              delay(20); 
+ 260   1      } 
+ 261          ReadOneChar(void)  //主机数据线先从高拉至低电平1us以上，再使数据线升为高电平，从而产生读信号
+ 262          {
+ 263   1              unsigned char i=0; //每个读周期最短的持续时间为60us，各个读周期之间必须有1us以上的高电平恢复期
+ 264   1              unsigned char dat=0; 
+ 265   1              for (i=8;i>0;i--) //一个字节有8位 
+ 266   1              {
+ 267   2                      TP=1; 
+ 268   2                      delay(1); 
+ 269   2                      TP=0;
+ 270   2                      dat>>=1;           //数据移位
+ 271   2                      TP=1; 
+ 272   2                      if(TP) 
+ 273   2                      dat|=0x80;         //得读取数据线得到一个状态
+ 274   2                      delay(4);
+ 275   2      } 
+ 276   1      return(dat);
+ 277   1      } 
+ 278          
+ 279          //*********************** **写一个字节**************************//
+ 280          
+ 281          void WriteOneChar(unsigned char dat) 
+ 282          { 
+ 283   1              unsigned char i=0; //数据线从高电平拉至低电平，产生写起始信号。15us之内将所需写的位送到数据线上，
+ 284   1              for(i=8;i>0;i--) //在15~60us之间对数据线进行采样，如果是高电平就写1，低写0发生。 
+ 285   1              {
+ 286   2                      TP=0; //在开始另一个写周期前必须有1us以上的高电平恢复期。 
+ 287   2                      TP=dat&0x01;  //按低位发送数据
+ 288   2                      delay(5); 
+ 289   2                      TP=1; 
+ 290   2                      dat>>=1;
+ 291   2              } 
+ 292   1              delay(4);
+ 293   1      } 
+ 294          void ReadTemperature(void) 
+ 295          { 
+ 296   1              /*
+ 297   1                      精确一点，计算读温度需要的时间
+ 298   1                      1. delay(103)
+ 299   1                      2. delay(44)
+ 300   1                      3. delay(44)
+C51 COMPILER V9.00   1                                                                     06/07/2019 08:28:27 PAGE 6   
+
+ 301   1                      4. delay(125)
+ 302   1                      5. delay(103+44+44)
+ 303   1                      6. delay(80)
+ 304   1              */
+ 305   1              Init_DS18B20(); //初始化
+ 306   1              WriteOneChar(0xcc); //跳过读序列号的操作
+ 307   1              WriteOneChar(0x44); //启动温度转换
+ 308   1              delay(125); //转换需要一点时间，延时
+ 309   1               
+ 310   1              Init_DS18B20(); //初始化
+ 311   1              WriteOneChar(0xcc); //跳过读序列号的操作 
+ 312   1              WriteOneChar(0xbe); //读温度寄存器（头两个值分别为温度的低位和高位） 
+ 313   1              tempL=ReadOneChar(); //读出温度的低位LSB
+ 314   1              tempH=ReadOneChar(); //读出温度的高位MSB 
+ 315   1      
+ 316   1              Sdata = tempL/16+tempH*16;      //整数部分
+ 317   1              xiaoshu = (tempL&0x0f)*10/16; //小数第一位
+ 318   1      }
+ 319          
+ 320          
+ 321          /**********LCD部分******************/
+ 322          void Write_Com(uchar Com){
+ 323   1              /*
+ 324   1                      液晶写指令，对应操作
+ 325   1              */
+ 326   1              RS = 0;
+ 327   1              P0 = Com;
+ 328   1              delay1ms(5);
+ 329   1              EN = 1;
+ 330   1              delay1ms(5);
+ 331   1              EN = 0;
+ 332   1              delay1ms(5);
+ 333   1      }
+ 334          void Write_Data(uchar Data){
+ 335   1              /*
+ 336   1                      液晶写数据
+ 337   1              */
+ 338   1              RS = 1;
+ 339   1              P0 = Data;
+ 340   1              delay1ms(5);
+ 341   1              EN = 1;
+ 342   1              delay1ms(5);
+ 343   1              EN = 0;
+ 344   1              delay1ms(5);
+ 345   1      }
+ 346          void Lcd_Init(){
+ 347   1              EN = 0;
+ 348   1              RW = 0;
+ 349   1              Write_Com(0x38);        //设置 16*2 显示，每个字符是5*7 点阵，8 位数据接口
+ 350   1              Write_Com(0x0c);    //开显示，不显示光标
+ 351   1              Write_Com(0x06);    //地址加 1，当写入数据的时候光标右移
+ 352   1              Write_Com(0x01);    //清屏,清楚之前的内容.
+ 353   1      }
+ 354          void Display_Temperature(uint Data){
+ 355   1              //Data转换成三位数
+ 356   1              //Data = 0x;
+ 357   1              uint Decade,Uint,k;
+ 358   1              Write_Com(0x80+11);
+ 359   1              for(k=0;k<5;k++){
+ 360   2                      if (setAlarm==2){
+ 361   3                              Write_Data(DisplayAlarmOpenStatus[k]);  
+ 362   3                      }else{
+C51 COMPILER V9.00   1                                                                     06/07/2019 08:28:27 PAGE 7   
+
+ 363   3                              Write_Data(DisplayAlarmCloseStatus[k]); 
+ 364   3                      }       
+ 365   2              }
+ 366   1              Decade = Data/10;
+ 367   1              Uint = Data%10;
+ 368   1              /*      0x80是第一行的第一个字符，0x80+1是第一行第二个,0x80+0x40是第二行第一个地址
+ 369   1                      写入显示地址时，要求最高位D7恒为高电平,即1000 0000 + 0100 0000 = 0x80 + 0x40
+ 370   1                      单片机规定
+ 371   1              */
+ 372   1              //Write_Com(0x80+0x40+5);
+ 373   1              //需要改进，太复杂了.
+ 374   1              Write_Com(0x80+0x40);   
+ 375   1              Write_Data(DisplayNums[Decade]);        //写入数据.
+ 376   1              Write_Data(DisplayNums[Uint]);
+ 377   1              Write_Data('.');
+ 378   1              Write_Data(DisplayNums[xiaoshu]);
+ 379   1              Write_Data('^');        //°C
+ 380   1              Write_Data('C');
+ 381   1              showTime(second);
+ 382   1              //问题是这样设置的闹钟响5下，但时间不对，即每5s响一下.
+ 383   1      }
+ 384          
+ 385          void Display_Static_Temperature(){
+ 386   1              uchar i;
+ 387   1              Write_Com(0x80);
+ 388   1              for(i=0;i<4;i++){
+ 389   2                      Write_Data(DisplayTips[i]);
+ 390   2              }
+ 391   1              Write_Com(0x80+5);
+ 392   1              for(i=0;i<6;i++){
+ 393   2                      Write_Data(DisplayAlarm[i]);
+ 394   2              }
+ 395   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1425    ----
+   CONSTANT SIZE    =     66    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     20      21
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
